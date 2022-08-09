@@ -1,0 +1,283 @@
+#include "./ds.h"
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <sys/unistd.h>
+#include <sys/signal.h>
+#include <sys/wait.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <netdb.h>
+#include <stdio.h>
+#include <time.h>
+
+
+#define BUFLEN		101			/* buffer length */
+
+// Index System Data Structures
+typedef struct  {
+  char contentName[10]; // The name of the content [Max of 10 characters]
+  char peerName[10];    // Name of peer [Folder Names]
+  int host;             // Port number for host
+  int port;             // Port number
+} contentListing;
+
+int main(int argc, char *argv[]) 
+{
+
+
+  // Index System
+  contentListing contentList[10]; //We want a max of 10 items in contents
+  contentListing tempContentBlock;
+  char lsList[10][10];
+  
+  int match = 0;
+  int lsmatch = 0;
+  int unique = 1;
+  
+  int lsPointer = 0;
+  int endPointer = 0;
+  
+  
+
+  // Variables used for transmitting data
+  struct  pdu packetrecieve,packetsend;
+  int     r_host, r_port;
+  char tcp_port[6];
+  char tcp_ip_addr[5];
+
+  // Variables needed for the sockets
+  struct  sockaddr_in fsin;	        // Address of the client	
+	char    *pts;
+	int		  sock;			                // Socket of the server 
+	time_t	now;			                // Time 
+	int		  alen;			                // Length of the Client's address 
+	struct  sockaddr_in sin;          // Enpoint address 
+    int     s,sz, type;               // Socket characteristics (description and type)
+	int 	  port = 3000;              // Default Port 
+	int 	  counter, n,m,i,bytes_to_read,bufsize; //Variables needed for server.c
+    int     errorFlag = 0;
+
+
+	switch(argc){
+	    case 2:
+	        port = atoi(argv[1]);
+	        break;
+	    case 1:
+	        break;
+		default:
+			fprintf(stderr, "Usage: %s [port]\n", argv[0]);
+		exit(1);
+	}
+    // Creating the Socket
+    memset(&sin, 0, sizeof(sin));
+    sin.sin_family = AF_INET;         //it's an IPv4 address
+    sin.sin_addr.s_addr = INADDR_ANY; //wildcard IP address
+    sin.sin_port = htons(port);       //bind to this port number
+                                                                                                 
+    // Creating the Socket (Allocation) 
+    s = socket(AF_INET, SOCK_DGRAM, 0);
+    if (s < 0)
+		fprintf(stderr, "Socket cannot be created\n");
+                                                                                
+    // Binding the Sockets 
+    if (bind(s, (struct sockaddr *)&sin, sizeof(sin)) < 0)
+		fprintf(stderr, "Cannot bind to %d port\n",port);
+    listen(s, 5);	
+	  alen = sizeof(fsin); 
+    char prTemp[10], portTemp[10], cTemp[10], hTemp[10];
+    while(1) {
+      if (recvfrom(s, &packetrecieve, BUFLEN, 0,(struct sockaddr *)&fsin, &alen) < 0)
+			  fprintf(stderr, "[ERROR] Error with recvfrom\n");
+      switch(packetrecieve.type){
+        //Here we will check for different types
+        /* Requesting Content Location */
+        case 'S':
+          //Make the content local
+          sscanf(packetrecieve.data,"%s %s",prTemp,cTemp);
+
+          match = 0;
+
+          for(i=0;i<endPointer;i++){
+            if (strcmp(cTemp, contentList[i].contentName) == 0){
+              memset(&tempContentBlock,'\0', sizeof(tempContentBlock));
+              strcpy(tempContentBlock.contentName, contentList[i].contentName);
+              strcpy(tempContentBlock.peerName, contentList[i].peerName);
+              tempContentBlock.port = contentList[i].port;
+              tempContentBlock.host = contentList[i].host;
+              // Sending host and port based on the matched address
+              match=1; 
+            }
+            // Shift the list 1 if content is found
+            if (match && i < endPointer-1){
+              strcpy(contentList[i].contentName,contentList[i+1].contentName);
+              strcpy(contentList[i].peerName, contentList[i+1].peerName);
+              contentList[i].port = contentList[i+1].port;
+              contentList[i].host = contentList[i+1].host;
+            }
+          }
+
+          if (match) {
+            endPointer = endPointer - 1;
+            // Commit content
+            memset(&contentList[endPointer],'\0', sizeof(contentList[endPointer])); // Clean Struct
+            strcpy(contentList[endPointer].contentName,tempContentBlock.contentName);
+            strcpy(contentList[endPointer].peerName,tempContentBlock.peerName);
+            contentList[endPointer].port = tempContentBlock.port;
+            contentList[endPointer].host = tempContentBlock.host;
+            endPointer = endPointer + 1;
+            packetsend.type = 'S';
+            strcpy(packetsend.data,tempContentBlock.peerName);
+			snprintf (tcp_ip_addr, sizeof(tcp_ip_addr), "%d", tempContentBlock.host);
+		    snprintf (tcp_port, sizeof(tcp_port), "%d",tempContentBlock.port);
+		    strcat(packetsend.data, " ");
+            strcat(packetsend.data, tcp_ip_addr);
+		    strcat(packetsend.data, " ");
+            strcat(packetsend.data, tcp_port);
+          }
+          else {
+            // Error
+            packetsend.type = 'E';
+					  strcpy(packetsend.data,"The conent does not exist");
+          }
+          sendto(s, &packetsend, BUFLEN, 0,(struct sockaddr *)&fsin, sizeof(fsin));
+          break;
+        
+        /* Registration */
+        case 'R':
+          sscanf(packetrecieve.data,"%s %s %s %s",cTemp, prTemp,hTemp,portTemp);
+          r_port = atoi(portTemp);
+          r_host = atoi(hTemp);
+         
+         errorFlag=0; 
+         for(i=0;i<endPointer;i++){
+             // Checking to see if content was already uploaded
+             if (strcmp(contentList[i].peerName, prTemp)==0 && !(contentList[i].host == r_host)) {
+              errorFlag = 2;
+              break;
+             }
+             else if (strcmp(contentList[i].contentName, cTemp) == 0 && strcmp(contentList[i].peerName, prTemp) == 0) {
+                errorFlag = 1;
+             }
+         }
+
+          /*  Reply  */
+          if (errorFlag==0){
+
+            // Check if the content is new
+            lsmatch=0;
+            for(i=0;i<lsPointer;i++){
+              if (strcmp(lsList[i], cTemp) == 0){
+                lsmatch = lsmatch+1;
+                break;
+              }
+            }
+            // Put the content in the list
+            if (!lsmatch) {
+              strcpy(lsList[lsPointer],cTemp);
+              lsPointer = lsPointer + 1;
+            }
+
+            // Put content in the list
+            memset(&contentList[endPointer],'\0', sizeof(contentList[endPointer])); // Clean Struct
+            strcpy(contentList[endPointer].contentName,cTemp);
+            strcpy(contentList[endPointer].peerName,prTemp);
+            contentList[endPointer].port = r_port;
+            contentList[endPointer].host = r_host;
+            endPointer = endPointer +=1; // Increment pointer to NEXT block
+            
+            // Acknowledged
+            packetsend.type = 'A';
+            memset(packetsend.data, '\0', 100);
+            strcpy(packetsend.data, prTemp);
+            fprintf(stderr, "Acknowledged\n"); 
+          }
+          else {
+            // Error
+            packetsend.type = 'E';
+            memset(packetsend.data, '\0', 100);
+            if (errorFlag == 1) {
+                strcpy(packetsend.data, "Error: File Already Registered")
+            }
+            else if (errorFlag == 2) {
+                strcpy(packetsend.data, "Error: PeerName Already Registered")
+            }
+            fprintf(stderr,"Error\n");
+          }
+          sendto(s, &packetsend, BUFLEN, 0,(struct sockaddr *)&fsin, sizeof(fsin));
+          break;
+        
+        
+        /* Deregistration */
+        case 'T':
+          // Make the content Local
+          sscanf(packetrecieve.data,"%s %s", prTemp,cTemp);
+          // Remove Content
+          match = 0;
+          for(i=0;i<endPointer;i++){
+            if ((strcmp(prTemp, contentList[i].peerName) == 0) && strcmp(cTemp, contentList[i].contentName)==0){
+              match=1;
+              }
+            // Shift list if content is found
+            if (match && i < endPointer-1){
+              strcpy(contentList[i].contentName,contentList[i+1].contentName);
+              strcpy(contentList[i].peerName, contentList[i+1].peerName);
+              contentList[i].port = contentList[i+1].port;
+              contentList[i].host = contentList[i+1].host;
+            }
+          }
+
+            if (!match) {
+                packetsend.type = 'E';
+                memset(packetsend.data, '\0', 10);
+                strcpy(packetsend.data, "File Removal Error");
+            }
+            else {
+                unique = 1; 
+                // Check if unique, if so,
+                endPointer = endPointer -1; 
+                for(i=0;i<endPointer;i++){
+                    if (strcmp(cTemp, contentList[i].contentName)==0){
+                        unique = 0;
+                    }
+                }
+                match = 0;
+                if (unique){
+                    for(i=0;i<lsPointer;i++){
+                        if (strcmp(cTemp, lsList[i])==0) {
+                    match=1;
+                }
+                if (match && i < lsPointer-1){
+                  strcpy(lsList[i],lsList[i+1]);
+                }
+              }
+              lsPointer = lsPointer - 1;
+            }
+
+            packetsend.type = 'A';
+            memset(packetsend.data, '\0', 10);
+            strcpy(packetsend.data, prTemp);
+            }
+          sendto(s, &packetsend, BUFLEN, 0,(struct sockaddr *)&fsin, sizeof(fsin));
+          break;
+
+        default:
+          break;
+        
+        /* Content List */
+        case 'O':
+          memset(packetsend.data, '\0', 100);
+          strcpy(packetsend.data,"");
+          for(i=0;i<lsPointer;i++){
+            strcat(packetsend.data,lsList[i]);
+            strcat(packetsend.data," ");
+          }
+          packetsend.type = 'O';
+          sendto(s, &packetsend, BUFLEN, 0,(struct sockaddr *)&fsin, sizeof(fsin));
+          break;
+        
+      } 
+
+    }
+}
